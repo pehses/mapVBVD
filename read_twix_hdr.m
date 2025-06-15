@@ -12,6 +12,12 @@ function [prot,rstraj] = read_twix_hdr(fid)
     for b=1:nbuffers
         %now read string up to null termination     
         bufname = fread(fid, 10, 'uint8=>char').';
+
+        % MeasYaps� % error: regexp: the input string is invalid UTF-8
+        % octave bug: https://savannah.gnu.org/bugs/?57107
+        % still open as of 2025-06-15 / seen on debian stable: GNU Octave, version 7.3.0
+        bufname(bufname>127) = 0;
+
         bufname = regexp(bufname, '^\w*', 'match');
         bufname = bufname{1};
         fseek(fid, numel(bufname)-9, 'cof');        
@@ -131,7 +137,14 @@ function mrprot = parse_ascconv(buffer)
         breaked = false;
         for k=1:numel(v)
             if isOctave
-                vk = v{k};
+                % 2025-06-15 / Octave 7.3.0
+                % error: struct cannot be indexed with {
+                if isstruct(v)
+                    vk = v(k);
+                else
+                    vk = v{k};
+                end
+
                 if iscell(vk.name)
                     % lazy fix that throws some info away
                     vk.name = vk.name{1};
