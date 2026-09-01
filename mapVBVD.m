@@ -46,8 +46,14 @@ function twix_obj = mapVBVD(filename,varargin)
 %                            os-removal or reflected lines. Also for random acquisitions.
 % Jonas Bause,    18.11.16   receiver phase for ramp-sampling fixed, now takes into account  
 %   Chris Mirkes & PE        offcenter shifts in readout direction
-% 
-% 
+% Steven Baete    26.08.26 * support for MDH_SLICE_ACCEL_REFSCAN SMS reference scans
+%   NYU SOM CBI            * read and export RawDataCorrectionFactors
+%                          * export ulTimeStamp, ixToRaw, and ixToTarget
+%                          * support to extract trajectory data stored in
+%                            sSYNC-objects
+%                          * extend parse_xprot to extract more fields
+%                          * option to only read the header
+%  
 % Input:
 % 
 % filename or simply meas. id, e.g. mapVBVD(122) (if file is in same path)
@@ -61,6 +67,7 @@ function twix_obj = mapVBVD(filename,varargin)
 %     .phasestabRef0: phase stab. ref. (MDH_REFPHASESTABSCAN && !MDH_PHASESTABSCAN)
 %     .phasestabRef1: phase stab. ref. (MDH_REFPHASESTABSCAN &&  MDH_PHASESTABSCAN)
 %     .refscan:       parallel imaging reference scan
+%     .slicerefscan:  slice acceleration reference scan
 %     .refscanPC:     phase correction scan for reference data
 %     .refscanPS:     phase stabilization scan for reference data
 %     .refscanPSRef0: phase stab. ref scan for reference data
@@ -194,10 +201,13 @@ arg.bReadImaScan    = true;
 arg.bReadNoiseScan  = true;
 arg.bReadPCScan     = true;
 arg.bReadRefScan    = true;
+arg.bReadSliceRefScan= true;
 arg.bReadRefPCScan  = true;
 arg.bReadRTfeedback = true;
 arg.bReadPhaseStab  = true;
 arg.bReadHeader     = true;
+arg.bReadOnlyHeader = false;
+arg.bReadTraj       = true;
 
 k=1;
 while k <= numel(varargin)
@@ -215,6 +225,9 @@ while k <= numel(varargin)
                 arg.bReadHeader = true;
                 k = k+1;
             end
+        case {'readonlyheader'}
+            arg.bReadOnlyHeader = true;
+            k = k+1;
         case {'removeos','rmos'}
             if numel(varargin) > k && ~ischar(varargin{k+1})
                 arg.removeOS = logical(varargin{k+1});
@@ -381,6 +394,59 @@ for s=1:NScans
             isInplacePATref = str2double(twix_obj{s}.hdr.MeasYaps.sPat.ucRefScanMode(end))==2;
         end
     end
+    
+    % read RawDataCorrectionFactors, Steven Baete
+    if (strcmp(version, 'vd'))
+        % Based on code by John Austin Roberts
+        % https://www.magnetom.net/t/fftscale-and-rawdatacorrectionfactor/3330/5
+
+        % list used coils, coilIDs and ADCChannelNo
+        if (isfield(twix_obj{s}.hdr.MeasYaps.sCoilSelectMeas,'aRxCoilSelectData'))
+            coilinfo = twix_obj{s}.hdr.MeasYaps.sCoilSelectMeas.aRxCoilSelectData{1};
+        else
+            coilinfo = twix_obj{s}.hdr.MeasYaps.sCoilSelectMeas;
+        end;
+        nCha = length(coilinfo.asList);
+        for c = 1:nCha
+            Coils(c).tElement = coilinfo.asList{c}.sCoilElementID.tElement;
+            Coils(c).ADCChannel = coilinfo.asList{c}.lADCChannelConnected;
+        end;
+        
+        fseek(fid,cPos,'bof');
+        textHeader = fread(fid, hdr_len-4, 'uchar=>char')';
+
+        clear CoilScalingFactors;
+        findThis = '{\s*{\s*{\s*"[^"]+"[^\n]+';
+        pStart = regexp(textHeader, findThis, 'start');
+        if length(pStart) > 0
+           pEnd = regexp(textHeader(pStart(1):end), '}[\n\s]*}[\n\s]*}', 'end');
+           if length(pEnd) > 0
+              allCoilsInHeaderCell = textHeader(pStart(1):pStart(1)+pEnd(1)+1);
+              findThis = '{\s*{\s*"(?<name>[^"]+)"\s*}\s*{\s*(?<fft>[\d\.]+)\s*}\s*{\s*(?<re>[\d\.-]+)\s*}\s*{\s*(?<im>[\d\.-]+)\s*}\s*}';
+              CoilStructArray = regexp(allCoilsInHeaderCell, findThis,'names');
+              if length(CoilStructArray) == nCha
+                 for c=1:nCha
+                    tName = CoilStructArray(c).name;
+                    % find ADC Channel Nr
+                    ADCChannel = Coils(find(contains([Coils(:).tElement],tName))).ADCChannel;
+                    CoilSelect.fftScale = sscanf(CoilStructArray(c).fft,'%f');
+                    CoilSelect.rawDataCorrectionFactor = complex(sscanf(CoilStructArray(c).re,'%f'),sscanf(CoilStructArray(c).im,'%f'));
+                    CoilSelect.txtOrder = c-1;
+                    CoilSelect.tElement = tName;
+                    CoilSelect.lADCChannel = ADCChannel;
+                    CoilScalingFactors(ADCChannel) = CoilSelect;
+                    clear CoilSelect
+                 end
+              end
+           end
+        end;
+        CoilScalingFactors = CoilScalingFactors([CoilScalingFactors.lADCChannel]);
+        twix_obj{s}.CoilScalingFactors = CoilScalingFactors;
+    end;
+    
+    if arg.bReadOnlyHeader
+        return;
+    end;
 
     % declare data objects:
     twix_obj{s}.image         = twix_map_obj(arg,'image',filename,version,rstraj);
@@ -390,6 +456,8 @@ for s=1:NScans
     twix_obj{s}.phasestabRef0 = twix_map_obj(arg,'phasestab_ref0',filename,version,rstraj);
     twix_obj{s}.phasestabRef1 = twix_map_obj(arg,'phasestab_ref1',filename,version,rstraj);
     twix_obj{s}.refscan       = twix_map_obj(arg,'refscan',filename,version,rstraj);
+    twix_obj{s}.slicerefscan  = twix_map_obj(arg,'slicerefscan',filename,version,rstraj);
+    twix_obj{s}.traj          = twix_map_obj(arg,'traj',filename,version,rstraj);
     twix_obj{s}.refscanPC     = twix_map_obj(arg,'refscan_phasecor',filename,version,rstraj);
     twix_obj{s}.refscanPS     = twix_map_obj(arg,'refscan_phasestab',filename,version,rstraj);
     twix_obj{s}.refscanPSRef0 = twix_map_obj(arg,'refscan_phasestab_ref0',filename,version,rstraj);
@@ -454,6 +522,17 @@ for s=1:NScans
             tmpMdh.(f{1}) = mdh.(f{1})( isCurrScan, : );
         end
         twix_obj{s}.refscan.readMDH( tmpMdh, filePos(isCurrScan) );
+    end
+    if arg.bReadSliceRefScan
+        clear tmpMdh
+        isCurrScan =    ( mask.MDH_SLICE_ACCEL_REFSCAN )...
+                     & ~( mask.MDH_PHASCOR | mask.MDH_PHASESTABSCAN | ...
+                          mask.MDH_REFPHASESTABSCAN | ...
+                          mask.MDH_RTFEEDBACK | mask.MDH_HPFEEDBACK);
+        for f = fieldnames( mdh ).'
+            tmpMdh.(f{1}) = mdh.(f{1})( isCurrScan, : );
+        end
+        twix_obj{s}.slicerefscan.readMDH( tmpMdh, filePos(isCurrScan) );
     end
     if arg.bReadRTfeedback
         clear tmpMdh
@@ -536,10 +615,19 @@ for s=1:NScans
         end
         twix_obj{s}.refscanPSRef1.readMDH( tmpMdh, filePos(isCurrScan) );
     end
+    if arg.bReadTraj
+        clear tmpMdh
+        isCurrScan =    ( mask.MDH_SYNCDATA == 1);
+        for f = fieldnames( mdh ).'
+            tmpMdh.(f{1}) = mdh.(f{1})( isCurrScan, : );
+        end
+        twix_obj{s}.traj.readMDH( tmpMdh, filePos(isCurrScan) );
+    end
     clear  mdh  tmpMdh  filePos  isCurrScan
 
     for scan = { 'image', 'noise', 'phasecor', 'phasestab', ...
                  'phasestabRef0', 'phasestabRef1', 'refscan', ...
+                 'slicerefscan', 'traj', ...
                  'refscanPC', 'refscanPS', 'refscanPSRef0', ...
                  'refscanPSRef1', 'RTfeedback', 'vop' }
         f = scan{1};
@@ -620,6 +708,7 @@ function [mdh_blob, filePos, isEOF] = loop_mdh_read( fid, version, Nscans, scan,
     % ======================================
     bit_0 = uint8(2^0);
     bit_5 = uint8(2^5);
+    bit_6 = uint8(2^6);
     mdhStart = 1-byteMDH;
 
     u8_000 = zeros( 3, 1, 'uint8'); % for comparison with data_u8(1:3)
@@ -630,6 +719,7 @@ function [mdh_blob, filePos, isEOF] = loop_mdh_read( fid, version, Nscans, scan,
     if isVD
         dmaOff  = szScanHeader;
         dmaSkip = szChannelHeader;
+	syncHeaderLength = 236;
     else
         dmaOff  = 0;
         dmaSkip = byteMDH;
@@ -695,8 +785,10 @@ function [mdh_blob, filePos, isEOF] = loop_mdh_read( fid, version, Nscans, scan,
         if bitand(bitMask, bit_5)   % MDH_SYNCDATA
             data_u8(4)= bitget( data_u8(4),1);  % ubit24: keep only 1 bit from the 4th byte
             ulDMALength = double( typecast( data_u8(1:4), 'uint32' ) );
-            cPos = cPos + ulDMALength;
-            continue
+	    if ~(ulDMALength > 2000 & ~(bitand(bitMask, bit_6)))
+            	cPos = cPos + ulDMALength;
+            	continue
+	    end;
         end
 
         % pehses: the pack bit indicates that multiple ADC are packed into one
@@ -705,8 +797,10 @@ function [mdh_blob, filePos, isEOF] = loop_mdh_read( fid, version, Nscans, scan,
         % the "DMA length"
         %     if mdh.ulPackBit
         % it seems that the packbit is not always set correctly
-        NCol_NCha = double( typecast( data_u8(dmaIdx), 'uint16' ) );  % [ushSamplesInScan  ushUsedChannels]
-        ulDMALength = dmaOff + (8*NCol_NCha(1) + dmaSkip) * NCol_NCha(2);
+        if (~bitand(bitMask, bit_5))
+            NCol_NCha = double( typecast( data_u8(dmaIdx), 'uint16' ) );  % [ushSamplesInScan  ushUsedChannels]
+            ulDMALength = dmaOff + (8*NCol_NCha(1) + dmaSkip) * NCol_NCha(2);
+        end;
 
         n_acq = n_acq + 1;
 
@@ -717,7 +811,11 @@ function [mdh_blob, filePos, isEOF] = loop_mdh_read( fid, version, Nscans, scan,
             szBlob = size( mdh_blob, 2 );
         end
         mdh_blob(:,n_acq) = data_u8;
-        filePos( n_acq )  = cPos;
+        if (~bitand(bitMask, bit_5))
+            filePos( n_acq )  = cPos;
+        else            
+            filePos( n_acq )  = cPos+syncHeaderLength;
+        end;
 
         progress = (cPos-measOffset)/measLength;
         
@@ -815,18 +913,38 @@ mask.MDH_SYNCDATA          = min(bitand(evalInfoMask1, 2^5), 1);
 mask.MDH_RAWDATACORRECTION = min(bitand(evalInfoMask1, 2^10),1);
 mask.MDH_REFPHASESTABSCAN  = min(bitand(evalInfoMask1, 2^14),1);
 mask.MDH_PHASESTABSCAN     = min(bitand(evalInfoMask1, 2^15),1);
+mask.MDH_D3FFT             = min(bitand(evalInfoMask1, 2^16),1);
 mask.MDH_SIGNREV           = min(bitand(evalInfoMask1, 2^17),1);
 mask.MDH_PHASCOR           = min(bitand(evalInfoMask1, 2^21),1);
 mask.MDH_PATREFSCAN        = min(bitand(evalInfoMask1, 2^22),1);
 mask.MDH_PATREFANDIMASCAN  = min(bitand(evalInfoMask1, 2^23),1);
 mask.MDH_REFLECT           = min(bitand(evalInfoMask1, 2^24),1);
 mask.MDH_NOISEADJSCAN      = min(bitand(evalInfoMask1, 2^25),1);
+mask.MDH_SLICE_ACCEL_REFSCAN = min(bitand(mdh.aulEvalInfoMask(:,2), 2^(38-32)),1);
 mask.MDH_VOP               = min(bitand(mdh.aulEvalInfoMask(:,2), 2^(53-32)),1); % was 0 in VD
 mask.MDH_IMASCAN           = ones( Nmeas, 1, 'uint32' );
 
+
+sel = (mask.MDH_SYNCDATA==1);
+if (sum(sel)>0)    
+    syncind = zeros(1,sum(sel));
+    sLCind = find(sel);
+    while (sum(sel(sLCind))>0)
+        syncind = syncind + sel(sLCind)';
+        sLCind(sel(sLCind)==1) = sLCind(sel(sLCind)==1) -1;
+        sLCind(sLCind <= 0) = find(sel==0,1);
+    end;
+    mdh.ushSamplesInScan(sel) = (double( typecast( reshape(mdh_blob(1:4,sel),[],1), 'uint32' ) ) - 256)/4;
+    mdh.ushUsedChannels(sel) = 1;
+    mdh.sLC(sel,:) = mdh.sLC(sLCind,:);
+    mdh.sLC(sel,10) = syncind-1;
+    
+    %ToDo take sLC from previous line
+end;
+
 noImaScan = ( mask.MDH_ACQEND           | mask.MDH_RTFEEDBACK   | mask.MDH_HPFEEDBACK    ...
             | mask.MDH_PHASCOR          | mask.MDH_NOISEADJSCAN | mask.MDH_PHASESTABSCAN ...
-            | mask.MDH_REFPHASESTABSCAN | mask.MDH_SYNCDATA );
+            | mask.MDH_REFPHASESTABSCAN | mask.MDH_SYNCDATA     | mask.MDH_SLICE_ACCEL_REFSCAN);
 
 if ~isInplacePATref
     noImaScan = (noImaScan | (mask.MDH_PATREFSCAN & ~mask.MDH_PATREFANDIMASCAN));
