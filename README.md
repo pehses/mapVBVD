@@ -16,6 +16,7 @@ Output: structure of twix_map_obj with elements (if available):
  * .phasestabRef0  phasestab. ref. (MDH_REFPHASESTABSCAN && !MDH_PHASESTABSCAN)
  * .phasestabRef1  phasestab. ref. (MDH_REFPHASESTABSCAN &&  MDH_PHASESTABSCAN)
  * .refscan        parallel imaging reference scan
+ * .slicerefscan   slice acceleration reference scan
  * .refscanPC      phase correction scan for reference data
  * .refscanPS      phase stabilization scan for reference data
  * .refscanPSRef0  phasestab. ref scan for reference data
