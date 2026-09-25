@@ -70,7 +70,7 @@ function prot = parse_buffer(buffer)
     [ascconv, xprot] = regexp(buffer,'### ASCCONV BEGIN[^\n]*\n(.*)\s### ASCCONV END ###','tokens','split');
 
     if ~isempty(ascconv)
-        ascconv = [ascconv{:}{:}];
+        ascconv = ascconv{:}{:};
         prot = parse_ascconv(ascconv);
     else
         prot = struct();
@@ -109,33 +109,6 @@ function xprot = parse_xprot(buffer)
 
         xprot.(name) = value;
     end
-    %% ParamArrays 
-    ind = findstr(buffer,'ParamArray');
-    for i = 1:length(ind) 
-        if i < length(ind)
-            next = i+1;
-            while (ind(next) < ind(i)+5000 & next < length(ind)), next = next+1; end;
-            stubArr = buffer((ind(i)-1):min(length(buffer),ind(next)-1));
-        else
-            stubArr = buffer((ind(i)-1):length(buffer));
-        end;
-        namet = regexp(stubArr, '<ParamArray\."(\w+)">','tokens');
-        if (~isempty(namet))
-            workarr = stubArr;
-            name = safe_fieldname(namet{1}{1});
-            stubArr = extract_brace_string(stubArr);
-            [tagStr2, tagType, stubArr] = find_next_tag(stubArr);
-            if (~strcmpi(tagStr2,'Default'))
-                stubArr = extract_brace_string(workarr);
-            end
-            tmp = [];level = 0;
-            tmp = parse_loop(tmp, stubArr, namet, level);
-
-            if (~isempty(name) & ~isfield(xprot,name))
-                xprot.(name) = tmp.x;
-            end;
-        end;
-    end;
 end
 
 
