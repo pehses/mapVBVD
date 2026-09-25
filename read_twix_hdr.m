@@ -70,7 +70,7 @@ function prot = parse_buffer(buffer)
     [ascconv, xprot] = regexp(buffer,'### ASCCONV BEGIN[^\n]*\n(.*)\s### ASCCONV END ###','tokens','split');
 
     if ~isempty(ascconv)
-        ascconv = [ascconv{:}{:}];
+        ascconv = ascconv{:}{:};
         prot = parse_ascconv(ascconv);
     else
         prot = struct();
@@ -109,33 +109,6 @@ function xprot = parse_xprot(buffer)
 
         xprot.(name) = value;
     end
-    %% ParamArrays 
-    ind = findstr(buffer,'ParamArray');
-    for i = 1:length(ind) 
-        if i < length(ind)
-            next = i+1;
-            while (ind(next) < ind(i)+5000 & next < length(ind)), next = next+1; end;
-            stubArr = buffer((ind(i)-1):min(length(buffer),ind(next)-1));
-        else
-            stubArr = buffer((ind(i)-1):length(buffer));
-        end;
-        namet = regexp(stubArr, '<ParamArray\."(\w+)">','tokens');
-        if (~isempty(namet))
-            workarr = stubArr;
-            name = safe_fieldname(namet{1}{1});
-            stubArr = extract_brace_string(stubArr);
-            [tagStr2, tagType, stubArr] = find_next_tag(stubArr);
-            if (~strcmpi(tagStr2,'Default'))
-                stubArr = extract_brace_string(workarr);
-            end
-            tmp = [];level = 0;
-            tmp = parse_loop(tmp, stubArr, namet, level);
-
-            if (~isempty(name) & ~isfield(xprot,name))
-                xprot.(name) = tmp.x;
-            end;
-        end;
-    end;
 end
 
 
@@ -192,74 +165,4 @@ function mrprot = parse_ascconv(buffer)
             mrprot = subsasgn(mrprot,S,value);
         end
     end 
-end
-
-function stvar = safe_fieldname(tagStr)
-    % this function checks potential fieldnames and makes sure they are valid
-    % for MATLAB syntax, e.g. 2DInterpolation -> x2DInterpolation (must begin
-    % with a letter)
-    
-    tagStr = strtrim(tagStr);
-    
-    if (isletter(tagStr(1)))
-        stvar = tagStr;
-    else
-        stvar = strcat('x', tagStr);
-    end
-    
-    if strfind(stvar, ';'), stvar = strrep(stvar, ';', '_'); end
-    if strfind(stvar, '@'), stvar = strrep(stvar, '@', '_'); end % VD13
-    if strfind(stvar, '-'), stvar = strrep(stvar, '-', '_'); end
-end
-
-function stvar = extract_brace_string(text)
-    % from parse_xprot.m from E. Auerbach, CMRR, 2013
-    % extracts string from within curly braces, including nested braces
-
-    tstart = strfind(text,'{');
-    tend = strfind(text,'}');
-    
-    stvar = [];
-    if (~isempty(tstart) & ~isempty(tend))
-        [brackind,ind] = sort([tstart,tend]);
-        pos = [ones(1,length(tstart)),-1*ones(1,length(tend))];
-        endind = find(cumsum(pos(ind))==0,1);
-        if (~isempty(endind))
-            endpos = brackind(endind);
-            stvar = text(tstart(1)+1:endpos-1);
-        end;
-    end;
-end
-
-function [tagStr, tagType, remStr] = find_next_tag(inStr)
-    % from parse_xprot.m from E. Auerbach, CMRR, 2013
-    % returns <tag> name and the remainder of the string following the tag.
-    % for e.g. <Tag>, returns tagStr='Tag', tagType=''
-    % for e.g. <ParamLong."Tag">, returns tagStr='Tag', tagType='ParamLong'
-    % if no tag is found, returns null strings
-    
-    tagStr = [];
-    tagType = [];
-    remStr = [];
-    
-    startPos = strfind(inStr,'<'); % look for start of tag
-    if (startPos)
-        endPos = strfind(inStr,'>'); % look for end of tag
-        if (endPos)
-            % found complete tag
-            fullTag = inStr(startPos+1:endPos-1);
-            
-            % now check for name/type
-            dotPos = strfind(fullTag,'."');
-            if (dotPos)
-                tagStr = getQuotString(fullTag(dotPos+1:end));
-                tagType = fullTag(1:dotPos-1);
-            else
-                tagStr = fullTag;
-            end
-            
-            % return remainder
-            remStr = inStr(endPos+1:end);
-        end
-    end
 end
