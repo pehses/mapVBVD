@@ -263,3 +263,333 @@ function [tagStr, tagType, remStr] = find_next_tag(inStr)
         end
     end
 end
+
+function mrprot = parse_loop(mrprot, workarr, tagName, level)
+    % from parse_xprot.m from E. Auerbach, CMRR, 2013
+    % this function is called recursively to parse the xprotocol
+    
+    [tagStr, tagType, workarr] = find_next_tag(workarr);
+    while (~isempty(workarr))
+        % for parammap, add the name as another level of the current array name
+        % and spawn off another copy of this function to deal with them
+        if (strncmpi(tagType, 'ParamMap', 8))
+            if (~isempty(tagStr))
+                level = level + 1;
+                tagName{level} = safe_fieldname(tagStr);
+            else
+                level = level + 1;
+                if (level == 1)
+                    tagName{level} = 'x';
+                else
+                    tagName{level} = tagName{level-1};
+                end;
+            end;
+            stubArr = extract_brace_string(workarr);
+            mrprot = parse_loop(mrprot, stubArr, tagName, level);
+            workarr = workarr(length(stubArr)+1:end);
+            %if (~isempty(tagStr))
+                level = level - 1;
+            %end
+    
+        % for paramarray, special processing is required
+        % for now, though, just skip them since the most important ones are
+        % still in the text mrprot and it would be a lot more work to process
+        % them here
+        elseif (strncmpi(tagType, 'ParamArray', 10))
+            if (~isempty(tagStr))
+                level = level + 1;
+                tagName{level} = safe_fieldname(tagStr);
+            end
+            stubArr = extract_brace_string(workarr);
+    
+    %         %skip the <default> tag, which always seems to be there
+            [tagStr2, tagType, stubArr] = find_next_tag(stubArr);
+            if (~strcmpi(tagStr2,'Default'))
+                %fprintf('parse_xprot(): unknown ParamArray format!')
+                stubArr = extract_brace_string(workarr);
+            end
+            % now map the fields
+    %         [tagStr, tagType, stubArr] = find_next_tag(stubArr);
+    
+            mrprot = parse_loop(mrprot, stubArr, tagName, level);
+    
+            temparr = workarr;
+            % walk down the string along the structure
+            structpos = ['mrprot'];
+            for i = 1:level
+                structpos = [structpos '.' tagName{i}];
+            end;
+            [temparr,~,count] = walkdown(mrprot,structpos,temparr,0,0);
+    
+            if (length(strfind(temparr,'{')) >= count )
+                % walk down the structure again, along the values of the stucture, and fill the values in
+                [temparr,mrprot] = walkdown(mrprot,structpos,temparr,1,0);
+            end;
+    
+    
+            workarr = workarr(length(stubArr)+1:end);
+    
+            if (~isempty(tagStr))
+                level = level - 1;
+            end
+    
+        elseif (strncmpi(tagType, 'PipeService', 11))
+            if (~isempty(tagStr))
+                level = level + 1;
+                tagName{level} = safe_fieldname(tagStr);
+            end
+            stubArr = extract_brace_string(workarr);
+            
+            %skip the <Class> tag, which always seems to be there
+            [tagStr, tagType, stubArr] = find_next_tag(stubArr);
+            if (~strcmpi(tagStr,'Class'))
+                fprintf('parse_xprot(): unknown PipeService format!')
+                stubArr = extract_brace_string(workarr);
+            end
+            
+            mrprot = parse_loop(mrprot, stubArr, tagName, level);
+            workarr = workarr(length(stubArr)+1:end);
+            if (~isempty(tagStr))
+                level = level - 1;
+            end
+            
+        elseif (strncmpi(tagType, 'Pipe', 4))
+            if (~isempty(tagStr))
+                level = level + 1;
+                tagName{level} = safe_fieldname(tagStr);
+            end
+            stubArr = extract_brace_string(workarr);
+            mrprot = parse_loop(mrprot, stubArr, tagName, level);
+            workarr = workarr(length(stubArr)+1:end);
+            if (~isempty(tagStr))
+                level = level - 1;
+            end
+            
+        elseif (strncmpi(tagType, 'ParamFunctor', 12))
+            if (~isempty(tagStr))
+                level = level + 1;
+                tagName{level} = safe_fieldname(tagStr);
+            end
+            stubArr = extract_brace_string(workarr);
+            
+            %skip the <Class> tag, which always seems to be there
+            [tagStr, tagType, stubArr] = find_next_tag(stubArr);
+            if (~strcmpi(tagStr,'Class'))
+                fprintf('parse_xprot(): unknown PipeService format!')
+                stubArr = extract_brace_string(workarr);
+            end
+            
+            mrprot = parse_loop(mrprot, stubArr, tagName, level);
+            workarr = workarr(length(stubArr)+1:end);
+            if (~isempty(tagStr))
+                level = level - 1;
+            end
+            
+        % these are values that we know how to process, so do so
+        elseif ((strncmpi(tagType, 'ParamBool', 9))     || ...
+                (strncmpi(tagType, 'ParamLong', 9))     || ...
+                (strncmpi(tagType, 'ParamDouble', 11))  || ...
+                (strncmpi(tagType, 'ParamString', 11))  || ...
+                (strncmpi(tagType, 'ParamChoice', 11)))
+            if (isempty(tagStr))
+                tagStr = 'x';
+            end;
+            tagName{level+1} = safe_fieldname(tagStr);
+            ind = strfind(workarr,'}');
+            ind2 = strfind(strtrim(workarr((ind(1)+1):end)),'{');
+            if (length(ind2) == 0)
+                ind2(1) = 0;
+            end;
+            if (ind2(1) == 1)
+                value = [];
+                ind = strfind(workarr,'{');
+                l = 1;
+                for i = 1:length(ind)
+                    stubStr = extract_brace_string(workarr(ind(i):end));
+                    %fprintf('%s = %s\n',tagName{level+1},stubStr);
+                    temp = get_xprot_value(stubStr, tagType);  
+                    if (~isempty(temp) && length(temp) == 1)
+                        value(l) = temp;
+                        l = l+1;
+                    end;
+                end;
+            else
+                stubStr = extract_brace_string(workarr);
+                %fprintf('%s = %s\n',tagName{level+1},stubStr);
+                value = get_xprot_value(stubStr, tagType);
+            end;
+            fields = {tagName{1:level+1}, value};
+            mrprot = setfield(mrprot, fields{:});
+            workarr = workarr(length(stubStr)+1:end);
+    
+        % we don't care about the things below, but acknowledge that we know
+        % about them
+        elseif (...%(strncmpi(tagType, 'ParamChoice', 11))      || ...
+                (strncmpi(tagType, 'Class', 5))             || ...
+                (strncmpi(tagType, 'Connection', 10))       || ...
+                (strncmpi(tagType, 'Event', 5))             || ...
+                (strncmpi(tagType, 'ParamFunctor', 12))     || ...
+                (strncmpi(tagType, 'Method', 6))            || ...
+                (strncmpi(tagType, 'ProtocolComposer', 16)) || ...
+                (strncmpi(tagType, 'Dependency', 10))       || ...
+                (strncmpi(tagType, 'ParamCardLayout', 15))  || ...
+                (strncmpi(tagType, 'EVACardLayout', 13)))
+            stubStr = extract_brace_string(workarr);
+            workarr = workarr(length(stubStr)+1:end);
+    
+            % ignore these also
+        elseif ((strncmpi(tagStr, 'Name', 4))             || ...
+                (strncmpi(tagStr, 'ID', 2))               || ...
+                (strncmpi(tagStr, 'Comment', 7))          || ...
+                (strncmpi(tagStr, 'Label', 5))            || ...
+                (strncmpi(tagStr, 'Visible', 7))          || ...
+                (strncmpi(tagStr, 'Userversion', 11)))
+            % skip to end of line for these
+            lend = strfind(workarr, char(10));
+            workarr = workarr(lend+1:end);
+        elseif (strncmpi(tagStr, 'EVAStringTable', 14))
+            % skip brace string for this one
+            stubStr = extract_brace_string(workarr);
+            workarr = workarr(length(stubStr)+1:end);
+            
+        % something unknown has happened if we reach this point, so throw a warning
+        else
+            if (~isempty(tagType))
+    %             fprintf('parse_xprot(): WARNING: found unknown tag %s (%s)\n',tagStr,tagType);
+            end;
+        end
+    
+        [tagStr, tagType, workarr] = find_next_tag(workarr);
+    end
+end
+
+function stvar = getQuotString(text)
+    % from parse_xprot.m from E. Auerbach, CMRR, 2013
+    % extracts string between double quotes, e.g. "string"
+    %  also works with double-double quotes, e.g. ""string""
+    
+    idx = strfind(text,'"');
+    
+    if ( (length(idx) == 4) && (idx(1)+1 == idx(2)) && (idx(3)+1 == idx(4)) ) % double-double quotes
+        stvar = text(idx(2)+1:idx(3)-1);
+    elseif (length(idx) >= 2) % double quotes, or ??? just extract between first and last quotes
+        stvar = text(idx(1)+1:idx(end)-1);
+    else % malformed?
+        stvar = text;
+    end
+end
+
+function value = get_xprot_value(stubStr, tagType)
+    % from parse_xprot.m from E. Auerbach, CMRR, 2013
+    % stubStr contains the values of interest, but also might include
+    % modifiers. we will just ignore the modifiers, which seem to always be
+    % terminated by CR.
+    
+    [tagStr, newtagType, remStr] = find_next_tag(stubStr);
+    while (~isempty(remStr)) % found a tag
+        if (~isempty(newtagType)) % not a modifier tag???
+            error('parse_xprot()::get_xprot_value(): ERROR: found unknown tag!')
+        else
+            % these are the modifier tags we know about
+            if ((strncmpi(tagStr, 'Precision', 9))      || ...
+                (strncmpi(tagStr, 'LimitRange', 10))    || ...
+                (strncmpi(tagStr, 'MinSize', 7))        || ...
+                (strncmpi(tagStr, 'MaxSize', 7))        || ...
+                (strncmpi(tagStr, 'Limit', 5))          || ...
+                (strncmpi(tagStr, 'Default', 7))        || ...
+                (strncmpi(tagStr, 'InFile', 6))         || ...
+                (strncmpi(tagStr, 'Context', 7))        || ...
+                (strncmpi(tagStr, 'Dll', 3))            || ...
+                (strncmpi(tagStr, 'Class', 5))          || ...
+                (strncmpi(tagStr, 'Comment', 7))        || ...
+                (strncmpi(tagStr, 'Label', 5))        || ...
+                (strncmpi(tagStr, 'Tooltip', 7))        || ...
+                (strncmpi(tagStr, 'Visible', 7))        || ...
+                (strncmpi(tagStr, 'Unit', 4)))
+                % acknowledge that we know about these tags
+            else
+    %             fprintf('parse_xprot(): WARNING: found unknown modifier %s\n',tagStr);
+            end
+            
+            % remove the line containing the tag
+            lstart = strfind(stubStr, ['<' tagStr '>']);
+            %lend = strfind(stubStr(lstart+1:end), char(10));
+            lend = lstart + length(tagStr) + 1;
+            if (lstart > 1)
+                stubStr = [stubStr(1:(lstart-1)) stubStr((lend+1):end)];
+            else
+                stubStr = stubStr((lend+1):end);
+            end
+        end
+    
+        [tagStr, newtagType, remStr] = find_next_tag(stubStr);
+    end
+    
+    if (strncmpi(tagType, 'ParamChoice', 11))
+        value = '';%getQuotString(stubStr);
+        ok = true;
+    end;
+    if (strncmpi(tagType, 'ParamString', 11))
+        value = getQuotString(stubStr);
+        ok = true;
+    else
+        stubStr = strrep(stubStr, char(10), ' '); % remove newlines
+        if (strncmpi(tagType, 'ParamBool', 9))
+            stubStr = strrep(stubStr, '"true"', '1');
+            stubStr = strrep(stubStr, '"false"', '0');
+            [value,ok] = str2num(stubStr); %#ok<ST2NM>
+            if (length(stubStr) > 1)
+                value = false;
+            else
+                value = (value ~= 0);
+            end;
+        elseif (strncmpi(tagType, 'ParamLong', 9))
+            [value,ok] = str2num(stubStr); %#ok<ST2NM>
+        elseif (strncmpi(tagType, 'ParamDouble', 11))
+            [value,ok] = str2num(stubStr); %#ok<ST2NM>
+            ind = strfind(stubStr,'.');
+            if (length(ind) > 0)
+                if (length(ind) == length(value) -1) % there is an indication of bitnumber
+                    value = value(2:end);
+                end;
+            end;
+        end
+    end
+    
+    if (~ok)
+        %fprintf('WARNING: get_xprot_value failed: %s\n', stubStr);
+        %disp(value);
+    end
+end
+
+function [tempArr,mrprot,count] = walkdown(mrprot,structpos,tempArr,fillin,count)
+    % from parse_xprot.m from E. Auerbach, CMRR, 2013
+    fnames = eval(['fieldnames(' structpos ');']);   
+    
+    for i = 1:length(fnames)
+        if (eval(['isstruct(' structpos '.' fnames{i} ')']))
+            ind = strfind(tempArr,'{');
+            tempArr = tempArr((ind(1)+1):end);
+            [tempArr,mrprot,count] = walkdown(mrprot,[structpos '.' fnames{i}],tempArr,fillin,count);
+            ind2 = strfind(tempArr,'}');
+            if (isempty(ind2))
+                tempArr = '';
+            else
+                tempArr = tempArr((ind2(1)+1):end);
+            end;
+            count = count +1;
+        else
+            ind = strfind(tempArr,'{');
+            ind2 = strfind(tempArr,'}');
+            if (fillin == 1)
+                try
+                    eval([structpos '.' fnames{i} ' = ' ( tempArr((ind(1)+1):(ind2(1)-1)) ) ';']);
+                catch
+                    eval([structpos '.' fnames{i} ' = 0;']);
+                end;
+            end;
+            tempArr = tempArr((ind2(1)+1):end);
+            count = count +1;
+        end;
+    end;
+end
