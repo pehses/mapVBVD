@@ -35,3 +35,12 @@ Michael Völker May-Aug 15 * Better error tolerance with incomplete files.
                         * => Parsing speed improved by factor 3...7 or so
                         * Speed increase for reading data, esp. when slicing,
                           os-removal or reflected lines. Also for random acquisitions.
+Jonas Bause,    18.11.16   receiver phase for ramp-sampling fixed, now takes into account  
+  Chris Mirkes & PE        offcenter shifts in readout direction
+Steven Baete    26.08.26 * support for MDH_SLICE_ACCEL_REFSCAN SMS reference scans
+  NYU SOM CBI            * read and export RawDataCorrectionFactors
+                         * export ulTimeStamp, ixToRaw, and ixToTarget
+                         * support to extract trajectory data stored in
+                           sSYNC-objects
+                         * extend parse_xprot to extract more fields
+                         * option to only read the header

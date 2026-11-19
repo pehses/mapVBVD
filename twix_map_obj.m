@@ -94,6 +94,7 @@ properties(GetAccess='public', SetAccess='protected')
     Idd
     Ide
 
+    ulTimeStamp
     centerCol
     centerLin
     centerPar
@@ -114,6 +115,11 @@ properties(GetAccess='public', SetAccess='protected')
 
     % memory position in file
     memPos
+
+    % index that translates simple, linear order of mdh info vectors
+    % to target matrix (of size dataSize)
+    ixToTarget % inverted page table (physical to virtual addresses)
+    ixToRaw    % page table (virtual to physical addresses)
     
     isBrokenFile % errors when parsing? 
 end
@@ -251,6 +257,11 @@ methods
         this.Idc        = sLC(:,12).';
         this.Idd        = sLC(:,13).';
         this.Ide        = sLC(:,14).';
+        try
+            this.ulTimeStamp = double( mdh.ulTimeStamp ).';
+        catch
+            this.ulTimeStamp = zeros(size(this.Ide));
+        end;
 
         this.evalInfoMask = double(mdh.aulEvalInfoMask).';
         evalInfoMask1     = this.evalInfoMask(1,:);
@@ -270,6 +281,13 @@ methods
         this.slicePos    = double( mdh.SlicePos ).';
         this.iceParam    = double( mdh.aushIceProgramPara ).';
         this.freeParam   = double( mdh.aushFreePara ).';
+        this.freadInfo.complex = 1;
+
+        % sSYNC with trajectory information
+        if (logical(min(bitand(evalInfoMask1,2^5),1)))
+            this.freadInfo.szScanHeader = 0;
+            this.freadInfo.complex      = 0;
+        end;
         this.memPos = filePos;
 
     end % of readMDH
@@ -316,7 +334,7 @@ methods
         % due to read errors.
         fields = { 'NCol', 'NCha',...
                    'Lin', 'Par', 'Sli', 'Ave', 'Phs', 'Eco', 'Rep',...
-                   'Set', 'Seg', 'Ida', 'Idb', 'Idc', 'Idd', 'Ide',...
+                   'Set', 'Seg', 'Ida', 'Idb', 'Idc', 'Idd', 'Ide','ulTimeStamp',...
                    'centerCol', 'centerLin', 'centerPar', 'cutOff',... 
                    'coilSelect' , 'ROoffcenter', 'timeSinceRF',...
                    'IsReflected', 'scancounter', 'timestamp', 'pmutime',...
@@ -395,7 +413,7 @@ methods
         nByte = this.NCha*(this.freadInfo.szChannelHeader+8*this.NCol);
 
         % size for fread
-        this.freadInfo.sz    = [2 nByte/8];
+        this.freadInfo.sz    = [this.freadInfo.complex + 1 nByte/8];
         % reshape size
         this.freadInfo.shape = [this.NCol+this.freadInfo.szChannelHeader/8 ...
                                , this.NCha];
@@ -564,6 +582,10 @@ methods
         % subsref overloading makes this.that-calls slow, so we need to
         % avoid them whenever possible
         szScanHeader = this.freadInfo.szScanHeader;
+        if (isfield(this.freadInfo,'complex')) % backwards compatibility for older .dat.mat-files
+            isComplex    = this.freadInfo.complex; 
+        else
+            isComplex = 1; end;
         readSize     = this.freadInfo.sz;
         readShape    = this.freadInfo.shape;
         readCut      = this.freadInfo.cut;
@@ -599,10 +621,11 @@ methods
         block     = blockInit;
         
         if bRegrid
-            v1       = single(1:selRangeSz(2)*blockSz);
-            rsTrj    = {this.rampSampTrj(:),v1(:)};
-            trgTrj   = linspace(min(this.rampSampTrj),max(this.rampSampTrj),this.NCol);
-            trgTrj   = {trgTrj(:),v1(:)};
+            v1       = single(1:selRangeSz(2));
+            v2       = single(1:blockSz);
+            rsTrj    = {this.rampSampTrj,v1,v2};
+            trgTrj   = linspace(min(this.rampSampTrj),max(this.rampSampTrj),this.dataSize(1));
+            trgTrj   = {trgTrj,v1,v2};
         end
     
         % counter for proper scaling of averages/segments
@@ -625,7 +648,11 @@ methods
             %       We could check if numel(raw) == prod(readSize), but people recommend exception handling for performance
             %       reasons. Do it.
             try
-                raw = reshape(complex(raw(:,1), raw(:,2)), readShape);
+                if (isComplex)
+                    raw = reshape( complex(raw(:,1), raw(:,2)), readShape);
+                else
+                    raw = reshape( raw(:,1), readShape);
+                end;
             catch exc
                 offset_bytes = mem(k) + szScanHeader;
                 %remainingSz = readSize(2) - size(raw,1);
@@ -761,6 +788,10 @@ methods
                         blockSz = max( blockSz/2, 1 );
                         blockInit = blockInit(:,:,1:blockSz);
                         doLockblockSz = true;
+                    end
+                    if bRegrid
+                        rsTrj{3}  = single(1:blockSz);
+                        trgTrj{3} = rsTrj{3};
                     end
                     tprev = t;
                 end
